@@ -139,8 +139,10 @@ chr_bin_size = * - chr_bin
 
 ; The background palette
 palette:
-  .word RGB(15,23,31),RGB(12,12, 0),RGB(14,23, 0),RGB(16,31, 0)
+  .word RGB(0,0,5),RGB(12,12, 0),RGB(14,23, 0),RGB(16,31, 0)
+;  .word RGB(15,23,31),RGB(12,12, 0),RGB(14,23, 0),RGB(16,31, 0)
   .word RGB( 0, 0,15),RGB(15,15, 0),RGB(23,23, 8),RGB(31,31,16)
+  .word RGB( 0, 0,15),RGB(15,15,15),RGB(23,23,23),RGB(31,31,31)
 palette_size = * - palette
 
 layer1_palette := palette

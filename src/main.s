@@ -3,13 +3,44 @@
 .smart
 .export main, nmi_handler
 
-USE_PSEUDOHIRES = 0
-USE_INTERLACE = 0
 USE_AUDIO = 1
 
 .segment "ZEROPAGE"
 nmis: .res 1
 oam_used: .res 2
+
+keydown: .res 4
+keynew:  .res 4
+keylast: .res 4
+
+CONTROLLER_TYPE = $F000
+CONTROLLER_NTT  = $4000
+KEY_0           = $0001
+KEY_1           = $0002
+KEY_2           = $0004
+KEY_3           = $0008
+KEY_4           = $0010
+KEY_5           = $0020
+KEY_6           = $0040
+KEY_7           = $0080
+KEY_8           = $0100
+KEY_9           = $0200
+KEY_STAR        = $0400
+KEY_NUMBER      = $0800
+KEY_POINT       = $1000
+KEY_C           = $2000
+KEY_ALWAYS_0    = $4000
+KEY_END         = $8000
+
+WhichKey:       .res 2 ; Most recently pressed key
+WhichLetter:    .res 2 ; Which letter within the digit
+TimeSincePress: .res 2 ; Frames since a digit was pressed
+TileUpdateValue:     .res 2 ; Tile to put on the screen
+TileUpdateAddress:   .res 2 ; Address to put TypingTile
+TileUpdateValue2:    .res 2 ; Tile to put on the screen
+TileUpdateAddress2:  .res 2 ; Address to put TypingTile
+.export TypingPointer
+TypingPointer:  .res 2 
 
 .segment "BSS"
 
@@ -57,21 +88,20 @@ OAMHI: .res 512
 .segment "CODE1"
 ; init.s sends us here
 .proc main
+  ; Clear zeropage
+  setaxy8
+  ldx #255
+: stz 0,x
+  dex
+  bpl :-
 
-  ; In the same way that the CPU of the Commodore 64 computer can
-  ; interact with a floppy disk only through the CPU in the 1541 disk
-  ; drive, the main CPU of the Super NES can interact with the audio
-  ; hardware only through the sound CPU.  When the system turns on,
-  ; the sound CPU is running the IPL (initial program load), which is
-  ; designed to receive data from the main CPU through communication
-  ; ports at $2140-$2143.  Load a program and start it running.
+  setaxy16
   .if ::USE_AUDIO
     jsl spc_boot_apu
   .endif
 
   jsl load_bg_tiles  ; fill pattern table
   jsl draw_bg        ; fill nametable
-  jsl load_player_tiles
 
   ; In LoROM no larger than 16 Mbit, all program banks can reach
   ; the system area (low RAM, PPU ports, and DMA ports).
@@ -99,62 +129,28 @@ OAMHI: .res 512
   sta BGSCROLLY+0  ; The PPU displays lines 1-224, so set scroll to
   sta BGSCROLLY+0  ; $FF so that the first displayed line is line 0
 
-  ; Pseudo hi-res and interlace are optional hardware features.
-  ; This demo doesn't use them much, but you can enable them when
-  ; building it to see what they look like.  They're described at
-  ; https://wiki.superfamicom.org/registers
-
-.if ::USE_PSEUDOHIRES
-  ; set up plane 1's scroll, offset by 4 pixels, to show
-  ; the half-pixels of pseudohires
-  lda #4
-  sta BGSCROLLX+2
-  stz BGSCROLLX+2
-  lda #$FF
-  sta BGSCROLLY+2
-  sta BGSCROLLY+2
-  lda #%00000010   ; enable plane 1 for left halves
-  sta BLENDSUB
-phbit = SUB_HIRES  ; split horizontal pixels
-.else
-phbit = 0
-.endif
-
-.if ::USE_INTERLACE
-ilbit = INTERLACE
-.else
-ilbit = 0
-.endif
-
-  lda #phbit|ilbit
-  sta PPURES
+  stz PPURES
   lda #%00010001  ; enable sprites and plane 0
   sta BLENDMAIN
   lda #VBLANK_NMI|AUTOREAD  ; but disable htime/vtime IRQ
   sta PPUNMI
 
   ; Set up game variables, as if it were the start of a new level.
-  stz player_facing
-  stz player_dxlo
-  lda #184
-  sta player_yhi
   setaxy16
-  stz player_frame_sub
-  lda #48 << 8
-  sta player_xlo
-
+  lda #$ffff
+  sta WhichKey
+  sta TileUpdateValue
+  sta TileUpdateValue2
+  lda #$6040
+  sta TypingPointer
 forever:
-
-  jsl move_player
 
   ; Draw the player to a display list in main memory
   setaxy16
   stz oam_used
-  jsl draw_player_sprite
 
-  ; Mark remaining sprites as offscreen, then convert sprite size
-  ; data from the convenient-to-manipulate format described by
-  ; psycopathicteen to the packed format that the PPU actually uses.
+  ; ---
+
   ldx oam_used
   jsl ppu_clear_oam
   jsl ppu_pack_oamhi
@@ -167,17 +163,350 @@ forever:
   lda #$0F
   sta PPUBRIGHT  ; turn on rendering
 
+  seta16
+  lda TileUpdateValue
+  cmp #$ffff
+  beq :+
+     lda TileUpdateAddress
+     sta PPUADDR
+     lda TileUpdateValue
+     sta PPUDATA
+     lda #$ffff
+     sta TileUpdateValue
+  :
+
+  lda TileUpdateValue2
+  cmp #$ffff
+  beq :+
+     lda TileUpdateAddress2
+     sta PPUADDR
+     lda TileUpdateValue2
+     sta PPUDATA
+     lda #$ffff
+     sta TileUpdateValue2
+  :
+
+  lda #$6020
+  sta PPUADDR
+  seta8
+  lda keydown
+  jsr PutHex
+  lda keydown+1
+  jsr PutHex
+  lda keydown+2
+  jsr PutHex
+  lda keydown+3
+  jsr PutHex
+
+
   ; wait for control reading to finish
   lda #$01
 padwait:
   bit VBLSTATUS
   bne padwait
 
-  ; This is where you'd usually update the scroll position.
-  ; The scrolling registers are write-twice: first write bits 7-0
-  ; then write bits 9-8 to the same address.
+  ; Update scroll position
   stz BGSCROLLX
   stz BGSCROLLX
 
+  seta16
+  lda keydown+2
+  sta keylast+2
+  seta8
+
+  ; Read additional buttons
+  stz keydown+2
+  lda #$80
+  sta keydown+3
+: lda JOY0
+  lsr
+  seta16
+  ror keydown+2
+  seta8
+  bcc :-
+
+  ; Find newly pressed keys
+  seta16
+  lda keydown
+  sta keylast
+
+  lda JOY1CUR
+  sta keydown
+
+  lda keylast
+  eor #$ffff
+  and keydown
+  sta keynew
+
+  lda keylast+2
+  eor #$ffff
+  and keydown+2
+  sta keynew+2
+  seta8
+
+  jsr RunKeyboard
+
   jmp forever
+.endproc
+
+.proc RunKeyboard
+  phk
+  plb
+
+  setaxy16
+
+  ; If it's been a bit, stop previewing and just use the current key
+  inc TimeSincePress
+  lda TimeSincePress
+  cmp #60
+  bcc :+
+    lda WhichKey
+    ina
+    beq :+
+      jsr TypeAKey
+      lda #$ffff
+      sta WhichKey
+      rts
+  :
+
+  lda keynew;+2
+  ora keynew+2
+  and #KEY_C
+  beq :++
+    ; Don't allow a key to come out via timer
+    lda #$ffff
+    sta WhichKey
+
+    stz TileUpdateValue
+    stz TileUpdateValue2
+    dec TypingPointer
+
+    lda TypingPointer
+    cmp #$6040
+    bcs :+
+      lda #$6040
+      sta TypingPointer
+    :
+
+    lda TypingPointer
+    sta TileUpdateAddress
+    ina
+    sta TileUpdateAddress2
+    rts
+  :
+
+  lda keynew;+2 ; Conveniently every button in the second 16 bits is keyboard related
+  ora keynew+2
+  bne :+
+    rts
+  :
+
+  ;;E C.#*9876543210
+  ldx #0
+: lsr
+  bcs :+
+  inx
+  cpx #14
+  bne :-
+  rts
+:
+
+  ; X = the key pressed
+  cpx WhichKey
+  beq NotNewKey
+    phx
+    jsr TypeAKey
+    plx
+    stx WhichKey
+    lda #.loword(-1)
+    sta WhichLetter
+  NotNewKey:
+
+  stz TimeSincePress
+  inc WhichLetter
+
+  jsr PreviewAKey
+
+  rts
+
+TypeAKey:
+  jsr GetCharacter
+  ora #1 << 10
+  sta TileUpdateValue
+  lda TypingPointer
+  inc TypingPointer
+  sta TileUpdateAddress
+  rts
+
+PreviewAKey:
+  jsr GetCharacter
+  ora #0 << 10
+  sta TileUpdateValue2
+  lda TypingPointer
+  sta TileUpdateAddress2
+  rts
+
+GetCharacter:
+  ; Ignore if no key pressed
+  lda WhichKey
+  ina
+  bne :+
+    pla
+    rts
+  :
+
+  ; Get the key table pointer
+  lda #.loword(KeyboardLower)
+  sta 0
+  ; Pick a key from there, and get the list of characters for the key
+  ldy WhichKey
+  lda (0),y
+  and #255
+  clc
+  adc 0
+  sta 0
+
+  ldy WhichLetter
+  lda (0),y
+  and #255
+  bne :+
+    ; Wrap around
+    stz WhichLetter
+    ldy #0
+
+    ; Is it still zero?
+    lda (0),y
+    and #255
+    bne :+
+      pla
+      rts
+  :
+  rts
+
+; https://toot.cat/@rnd/110668370139659844
+
+; 1     2ABC 3DEF
+; 4GHI  5JKL 6MNO
+; 7PRQS 8TUV 9WXYZ
+;       0[ ]
+; 1 usually does punctuation
+
+
+KeyboardPointers:
+  .addr KeyboardLower
+  .addr KeyboardUpper
+
+KeyboardLower:
+:
+  .byt @K0 - :-
+  .byt @K1 - :-
+  .byt @K2 - :-
+  .byt @K3 - :-
+  .byt @K4 - :-
+  .byt @K5 - :-
+  .byt @K6 - :-
+  .byt @K7 - :-
+  .byt @K8 - :-
+  .byt @K9 - :-
+  .byt @KS - :-
+  .byt @KN - :-
+  .byt @KP - :-
+@K0:
+  .byt " .,",59,0
+@K1:
+  .byt 0
+@K2:
+  .asciiz "abc2"
+@K3:
+  .asciiz "def3"
+@K4:
+  .asciiz "ghi4"
+@K5:
+  .asciiz "jkl5"
+@K6:
+  .asciiz "mno6"
+@K7:
+  .asciiz "pqrs7"
+@K8:
+  .asciiz "tuv8"
+@K9:
+  .asciiz "wxyz9"
+@KS:
+  .byt 0
+@KN:
+  .byt 0
+@KP:
+  .byt 0
+
+KeyboardUpper:
+:
+  .byt @K0 - :-
+  .byt @K1 - :-
+  .byt @K2 - :-
+  .byt @K3 - :-
+  .byt @K4 - :-
+  .byt @K5 - :-
+  .byt @K6 - :-
+  .byt @K7 - :-
+  .byt @K8 - :-
+  .byt @K9 - :-
+  .byt @KS - :-
+  .byt @KN - :-
+  .byt @KP - :-
+@K0:
+  .asciiz " !?-0"
+@K1:
+  .byt 0
+@K2:
+  .asciiz "ABC2"
+@K3:
+  .asciiz "DEF3"
+@K4:
+  .asciiz "GHI4"
+@K5:
+  .asciiz "JKL5"
+@K6:
+  .asciiz "MNO6"
+@K7:
+  .asciiz "PQRS7"
+@K8:
+  .asciiz "TUV8"
+@K9:
+  .asciiz "WXYZ9"
+@KS:
+  .byt 0
+@KN:
+  .byt 0
+@KP:
+  .byt 0
+.endproc
+
+.proc PutHex
+  php
+  setaxy8
+  pha
+  lsr
+  lsr
+  lsr
+  lsr
+  and #15
+  tax
+  lda Table,x
+  sta PPUDATA
+  lda #2 << (10-8)
+  sta PPUDATA+1
+
+  pla
+  and #15
+  tax
+  lda Table,x
+  sta PPUDATA
+  lda #2 << (10-8)
+  sta PPUDATA+1
+
+  plp
+  rts
+
+Table:
+  .byt "0123456789ABCDEF"
 .endproc

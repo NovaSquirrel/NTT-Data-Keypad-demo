@@ -10,13 +10,13 @@
 #
 
 # These are used in the title of the SFC program and the zip file.
-title = lorom-template
+title = phonetyping
 version = 0.06
 
 # Space-separated list of asm files without .s extension
 # (use a backslash to continue on the next line)
 objlist = \
-  snesheader init main bg player \
+  snesheader init main bg \
   ppuclear blarggapu spcimage musicseq
 objlistspc = \
   spcheader spcimage musicseq
@@ -44,7 +44,7 @@ endif
 SPCPLAY := gmeplay
 
 ifdef COMSPEC
-PY := py.exe
+PY := py.exe -3
 else
 PY :=
 endif
@@ -123,8 +123,6 @@ $(objdir)/mktables.s: tools/mktables.py
 # Files that depend on extra included files
 $(objdir)/bg.o: \
  $(objdir)/bggfx.chrgb
-$(objdir)/player.o: \
- $(objdir)/swinging2.chrsfc
 $(objdir)/spcimage.o: $(brrlisto)
 $(objdir)/musicseq.o $(objdir)/spcimage.o: src/pentlyseq.inc
 
